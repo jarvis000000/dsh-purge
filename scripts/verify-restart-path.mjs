@@ -1,13 +1,15 @@
 /**
- * 重启路径回归：dsh 0.2.1 上必须拿到「优雅退出」适配器。
+ * 重启路径回归：0.2.1 上不能再伪造 shutdown-complete。
  *
- * 事故（2026-10-21 14:14 / 14:24 / 14:47 反复）：
- *   插件 apply 后靠 process.exit(0) 让 host 退出，等 PowerShell 先杀 Electron。
- *   抢不过就触发宿主 main.js:3845 的 "host stopped" 崩溃框。
+ * Electron 侧 main.js:3833 的判定是：
+ *   if (message.type === "shutdown-complete") if (this.stopping) this.shutdownCompleted = true;
+ *   else this.fail(new Error("dsh desktop host acknowledged an unrequested shutdown"));
  *
- * 根因：dsh 0.2.1 不再提供 desktopRuntime / desktopActions / requestRestart，
- * desktopRuntimeOf() 恒返回 null，永远走 "no runtime handoff" 分支。
- * 0.2.1 的预期退出协议是 IPC：host → {"type":"shutdown-complete"} → Electron。
+ * this.stopping 只有 Electron 自己的 stop() 会置位（它先发 {type:"shutdown"} 给 host），
+ * host 单方面发 shutdown-complete 会被判成异常。
+ * 实测 2026-10-21 14:29:52 就崩在这一行：acknowledged an unrequested shutdown。
+ *
+ * 正确做法：只断开 IPC，不发那条消息。
  */
 import { pathToFileURL } from "node:url";
 
@@ -18,8 +20,8 @@ const desktop = await import(
 let failures = 0;
 function check(name, fn) {
   try {
-    const d = fn();
-    console.log(`PASS  ${name}${d ? ` — ${d}` : ""}`);
+    const detail = fn();
+    console.log(`PASS  ${name}${detail ? ` — ${detail}` : ""}`);
   } catch (e) {
     failures += 1;
     console.log(`FAIL  ${name} — ${e?.message || e}`);
@@ -41,15 +43,22 @@ const ctx021 = (extra = {}) => {
   return { get: (k) => services.get(k) };
 };
 
-/** 模拟 Electron fork 出来的 IPC 通道。 */
+/** 模拟 Electron fork 出来的 IPC 通道，记录 send 与 disconnect。 */
 function withIpc(fn) {
   const sent = [];
+  let disconnected = 0;
   const prevSend = process.send;
+  const prevDisconnect = process.disconnect;
   const prevConnected = process.connected;
-  process.send = (msg, cb) => { sent.push(msg); if (typeof cb === "function") cb(null); };
+  process.send = (msg, cb) => {
+    sent.push(msg);
+    if (typeof cb === "function") cb(null);
+  };
+  process.disconnect = () => { disconnected += 1; };
   Object.defineProperty(process, "connected", { value: true, configurable: true });
-  return Promise.resolve(fn(sent)).finally(() => {
+  return Promise.resolve(fn(sent, () => disconnected)).finally(() => {
     process.send = prevSend;
+    process.disconnect = prevDisconnect;
     Object.defineProperty(process, "connected", { value: prevConnected, configurable: true });
   });
 }
@@ -59,18 +68,19 @@ await withIpc(async () => {
     const rt = of(ctx021());
     assert(rt, "返回 null → 会走 process.exit 分支，弹崩溃框");
     assert(typeof rt.requestRestart === "function", "缺 requestRestart");
-    return "ok";
+    assert(rt.kind === "ipc-disconnect", `kind 应为 ipc-disconnect，实际 ${rt.kind}`);
+    return rt.kind;
   });
 });
 
-await withIpc(async (sent) => {
+await withIpc(async (sent, discos) => {
   const rt = of(ctx021());
   await rt.requestRestart();
-  check("requestRestart() 走 IPC 发 shutdown-complete", () => {
-    assert(sent.length > 0, "没有发出任何 IPC 消息");
-    const msg = sent.find((m) => m && m.type === "shutdown-complete");
-    assert(msg, `发了 ${JSON.stringify(sent)}，但不是 shutdown-complete`);
-    return JSON.stringify(msg);
+  check("requestRestart() 只断开 IPC，绝不发 shutdown-complete", () => {
+    const bad = sent.filter((m) => m && m.type === "shutdown-complete");
+    assert(bad.length === 0, "发了 shutdown-complete，Electron 会报 unrequested shutdown");
+    assert(discos() === 1, `disconnect 调用 ${discos()} 次，应为 1`);
+    return `sent=${JSON.stringify(sent)} disconnect=${discos()}`;
   });
 });
 
