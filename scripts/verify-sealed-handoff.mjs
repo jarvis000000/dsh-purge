@@ -89,5 +89,46 @@ check("完全没有解包目录（纯 asar 密封包）→ 不算在运行", () 
   } finally { l.cleanup(); }
 });
 
+// ── desktop.js 侧的独立入口也要拦住 ──────────────────────────────────────────
+// 14:52 那次崩溃走的是 restartOfficialHarness()，它没经过 core.sealedAsarHandoff()，
+// 自己看 asar 文件还在就直接 PowerShell 换包，所以必须在这一层也判。
+const desktop = await import(
+  pathToFileURL("C:/Users/wangj/.dsh/profiles/desktop/node_modules/dsh-purge/lib/desktop.js").href
+);
+
+check("desktop.restartOfficialHarness：解包目录在跑时拒绝换包", () => {
+  const r = desktop.restartOfficialHarness({
+    exe: "E:/DSH/DSH.exe",
+    asar: "E:/DSH/resources/app.asar",
+  });
+  assert(r.restarting === false, `仍在重启：${JSON.stringify(r)}`);
+  assert(r.reason === "unpacked-already-live", `reason=${r.reason}`);
+  return r.reason;
+});
+
+check("desktop.unpackedAppIsLiveForAsar：完整解包 → true", () => {
+  const l = layout();
+  try {
+    assert(desktop.unpackedAppIsLiveForAsar(l.asar) === true, "完整解包没认出");
+    return "true";
+  } finally { l.cleanup(); }
+});
+
+check("desktop.unpackedAppIsLiveForAsar：缺 main → false", () => {
+  const l = layout({ mainExists: false });
+  try {
+    assert(desktop.unpackedAppIsLiveForAsar(l.asar) === false, "缺 main 却判为在跑");
+    return "false";
+  } finally { l.cleanup(); }
+});
+
+check("desktop.unpackedAppIsLiveForAsar：纯 asar → false", () => {
+  const l = layout({ unpacked: false });
+  try {
+    assert(desktop.unpackedAppIsLiveForAsar(l.asar) === false, "纯密封包判为在跑");
+    return "false";
+  } finally { l.cleanup(); }
+});
+
 console.log(`\n${failures === 0 ? "all passed" : `${failures} failed`}`);
 process.exit(failures === 0 ? 0 : 1);
