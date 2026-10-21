@@ -329,6 +329,7 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"restart.timeout": "超时，请刷新",
 			"restart.fail": "失败: {error}",
 			"restart.notStarted": "重启没有开始，客户端还在。不会自动再试。",
+			"restart.notNeeded": "清洗已生效，无需重启。",
 			"restart.already": "这一次重启已经开始，不会再重启一次。",
 			"restart.confirm": "清洗已完成，重启后生效。",
 			"restart.confirm.desktop": "清洗已完成，重启桌面应用后生效。",
@@ -669,6 +670,7 @@ window.__ModuleLoader__.load({ id: "dsh-purge", factory: (require) => {
 			"restart.timeout": "Timed out; refresh",
 			"restart.fail": "Failed: {error}",
 			"restart.notStarted": "Restart did not start. This client is still open, and it will not try again by itself.",
+			"restart.notNeeded": "Patches are already in effect. No restart needed.",
 			"restart.already": "This restart already started. It will not restart again.",
 			"restart.confirm": "Apply finished. Restart to take effect.",
 			"restart.confirm.desktop": "Apply finished. Restart the desktop app to take effect.",
@@ -2743,6 +2745,15 @@ body:not([data-ds-dark-theme]) .dshp-auth-ops button.primary{background:var(--ds
 					if (!d.ok) throw new Error(d.error || "restart failed");
 					const next = (d && d.surface) || surf;
 					const full = next === "desktop" || (d && d.fullApp) || desktop;
+					// 「解包目录已在运行」：补丁写在启动时加载的那份里，本来就生效了，
+					// 服务端不会也不能重启宿主。这是成功终态 —— 直接报完成，别进 25s 超时。
+					if (d && d.alreadyLive) {
+						clearTimeout(watch);
+						restartOnce = false;
+						setNotice({ kind: "ok", text: d.note || t("restart.notNeeded") });
+						setBusy(false);
+						return;
+					}
 					if (full && d.already) {
 						setNotice({ kind: "ok", text: hostText(t, "restarting", next) });
 						return;
