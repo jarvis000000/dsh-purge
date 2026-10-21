@@ -5,6 +5,7 @@
  * 用法：node scripts/verify-40-021.mjs [--host <app/dsh 目录>]
  */
 import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { join } from "node:path";
 import { resolve } from "node:path";
@@ -33,22 +34,36 @@ assert(fs.existsSync(target), `找不到 ${target}（用 --host 指定）`);
 const original = fs.readFileSync(target, "utf8");
 const p40 = core.ALL_PATCHES.find((p) => p.id === 40);
 
+// 宿主文件若已打过补丁，锚点已被 consumed，必须换用 npm 原版做基准，
+// 否则会误报「pattern 匹配不上」。
+let baseline = original;
+let usedPristine = false;
+if (original.includes("[dsh-purge]")) {
+  const pristine = [
+    join(os.tmpdir(), "dsh-system-prompt-orig", "package", "lib", "index.js"),
+  ].find((p) => fs.existsSync(p));
+  if (pristine) {
+    baseline = fs.readFileSync(pristine, "utf8");
+    usedPristine = true;
+  }
+}
+
 check("#40 是 COMPLETE_PROMPT_KEEP_INJECT", () => {
   assert(p40, "找不到 #40");
   assert(p40.name === "COMPLETE_PROMPT_KEEP_INJECT", p40.name);
-  return "";
+  return usedPristine ? "宿主已打补丁，基准改用 npm 原版" : "";
 });
 
 check("#40 在 0.2.1 宿主文件上至少命中一条 pattern", () => {
   const hits = p40.replacements.filter((r) => (
-    r.pattern instanceof RegExp ? r.pattern.test(original) : original.includes(r.pattern)
+    r.pattern instanceof RegExp ? r.pattern.test(baseline) : baseline.includes(r.pattern)
   )).length;
   assert(hits > 0, "所有 pattern 都匹配不上 → 会变成 skipped");
   return `${hits}/${p40.replacements.length} 命中`;
 });
 
 check("applyReplacementsToText 真的改写内容并写入 marker", () => {
-  const out = core.applyReplacementsToText(original, p40, target);
+  const out = core.applyReplacementsToText(baseline, p40, target);
   assert(out.changed, "changed=false，等于没写");
   assert(
     out.text.includes("complete prompt keeps inject + agent-instructions"),
@@ -58,7 +73,7 @@ check("applyReplacementsToText 真的改写内容并写入 marker", () => {
 });
 
 check("改写保留 requiredContexts 语义（0.2.1 的 contexts 过滤）", () => {
-  const out = core.applyReplacementsToText(original, p40, target);
+  const out = core.applyReplacementsToText(baseline, p40, target);
   assert(out.text.includes("const requiredContexts = new Set("), "requiredContexts 丢了");
   assert(
     out.text.includes("transformed.contexts.filter((entry) => requiredContexts.has(entry.name))"),
@@ -68,13 +83,13 @@ check("改写保留 requiredContexts 语义（0.2.1 的 contexts 过滤）", () 
 });
 
 check("改写保留 purge 段注入", () => {
-  const out = core.applyReplacementsToText(original, p40, target);
+  const out = core.applyReplacementsToText(baseline, p40, target);
   assert(out.text.includes('startsWith("dsh-purge")'), "purge 过滤逻辑丢了");
   return "";
 });
 
 check("幂等：二次 apply 不再变化", () => {
-  const once = core.applyReplacementsToText(original, p40, target);
+  const once = core.applyReplacementsToText(baseline, p40, target);
   const twice = core.applyReplacementsToText(once.text, p40, target);
   assert(twice.changed === false, "二次 apply 仍在改，可能重复注入");
   return "";
@@ -100,3 +115,4 @@ check("兜底 pattern 能接管未知形状", () => {
 
 console.log(`\n${failures === 0 ? "all passed" : `${failures} failed`}`);
 process.exit(failures === 0 ? 0 : 1);
+
