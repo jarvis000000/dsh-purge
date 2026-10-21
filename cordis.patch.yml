@@ -24,11 +24,20 @@
   name: dsh-redteam-mode/ui
   disabled: true
 
+# 注意：personaSuffix 必须是空串，且全文不能出现 {{cwd}}。
+# dsh >= 0.2.1-rc.2 的 agent-loop 只注册 provider / model 两个提示词变量，
+# 不再有 cwd；而 system-prompt 的插值是严格的——渲染时遇到未注册变量会直接抛
+# unknown prompt variable "{{cwd}}"，提示词组装在任何模型请求之前就失败，
+# 每一轮都会变成 "本轮运行失败"（重启也救不回来）。
+# 工作目录由官方 working-directory 服务作为 runtime context 提供，不需要重复注入。
+# 插件自己也不再注册 cwd 变量（不往宿主提示词注册表里塞非官方变量）。
+# 报错里的 "in section deployment:persona-suffix" 就是这一行写进去的。
 - id: system-prompt
+  name: '@deepseek-ai/dsh-system-prompt'
   config:
     includeHarnessIdentity: false
     personaPrefix: ""
-    personaSuffix: Your working directory is {{cwd}}.
+    personaSuffix: ""
 
 - id: dsh-purge
   inject: [systemPrompt, tools]

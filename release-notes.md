@@ -1,3 +1,29 @@
+# 1.1.71-dsh021cwd.1（本机修复构建）
+
+## 中文
+
+- 修掉 dsh ≥ 0.2.1-rc.2 上的 `unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix"`。
+  该版本宿主 agent-loop 只注册 `provider` / `model`，不再有 `cwd`；而 system-prompt 的插值是严格的，
+  未注册变量会让提示词组装在任何模型请求之前抛错，表现为**每一轮都是「本轮运行失败」**，重启无效。
+- `cordis.patch.yml`：`system-prompt` 的 `personaSuffix` 改为空串，并显式带上 `name` 以便按 id 合并。
+- 不再把 cwd 写回提示词：`lib/identity.js` 的 `CWD_ONLY_SUFFIX` 置空、`overlayOfficialIdentity` /
+  `stripHarnessPersona` 清掉旧版残留的 cwd 后缀且不再补回；`lib/core.js` 的 persona 句去掉 cwd 前缀；
+  `presets/redteam/agent.cordis.yml` 的 persona 行写明 `suffix: ''` 并删掉误导性注释。
+- 兜底闸：`rewritePromptAssembly` 返回前把**未注册或无值**的 `{{name}}` 降级成字面量 `{ {name} }`，
+  再也不会因为一个变量把整轮请求打掉（合法变量照常插值）。用户自写的 `postPrompt` 段同样转义。
+- `apply()` 加了顶层 try/catch：插件内部任何一处抛错只打日志，不再让宿主把整个插件判为未激活。
+- 新增 `scripts/verify-cwd-fix.mjs`（直接调用宿主自己的 `renderPrompt` 验证，含旧版必挂的回归用例）
+  与 `scripts/smoke-apply.mjs`（最小 ctx 下 apply 不抛错）。
+
+## English
+
+- Fixes `unknown prompt variable "{{cwd}}" in section "deployment:persona-suffix"` on dsh ≥ 0.2.1-rc.2.
+  The agent loop registers only `provider` / `model`, and system-prompt interpolation is strict, so the
+  unresolved reference failed prompt assembly before every model request. `personaSuffix` is now empty,
+  no code path writes `{{cwd}}` back into the prompt, and any unregistered `{{name}}` degrades to its
+  literal text instead of failing the turn. `apply()` is wrapped so an internal error cannot get the
+  whole plugin marked inactive.
+
 # 1.1.71
 
 ## 中文

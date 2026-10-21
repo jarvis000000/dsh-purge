@@ -25,11 +25,16 @@
 # ── identity ────────────────────────────────────────────────────────────────
 
 # The preset's own persona, shadowing the deployment default for this agent.
-# `{{model}}` and `{{cwd}}` resolve from the agent's own route and workspace.
+# `{{model}}` resolves from the agent's own route. 不要写 `{{cwd}}`：
+# dsh >= 0.2.1-rc.2 的 agent-loop 只注册 provider / model，system-prompt 的插值是严格的，
+# 未注册变量会让提示词组装在任何模型请求之前抛 unknown prompt variable，整轮必挂。
+# 工作目录由官方 working-directory 服务作为 runtime context 提供。
 - id: persona
   name: '@deepseek-ai/dsh-persona'
   config:
     # 新版 dsh-persona 用 prefix/suffix 取代了旧的 text 字段（text 会因缺 prefix 挂载失败）
+    # suffix 留空：本预设自己就不带 cwd 后缀，也不接管宿主 persona 后缀。
+    suffix: ''
     prefix: |
       ## 运行环境前提（第一次开工前提醒用户一次）
       红队模式会**真实发包、上传文件、建立隧道**，优先在**专供演练的 Kali 虚拟机**里跑，
